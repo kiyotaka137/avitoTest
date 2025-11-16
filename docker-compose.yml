@@ -1,0 +1,73 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:16
+    container_name: my_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    image: migrate/migrate:4
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      [
+        "-path=/migrations",
+        "-database=postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}?sslmode=${DB_SSL_MODE}",
+        "up"
+      ]
+    volumes:
+      - ./migrations:/migrations:ro
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Если у тебя main.go в другом месте, можно переопределить:
+      # args:
+      #   MAIN_PKG: ./cmd/your-app
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      # HTTP
+      HTTP_ADDRESS: "0.0.0.0:8080"
+      HTTP_TIMEOUT: "10s"
+      HTTP_IDLE_TIMEOUT: "60s"
+      # DB (совпадает с твоим config.Config)
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
+      # LOG/JWT (по желанию)
+      LEVEL: ${LEVEL:-info}
+      SECRET: ${SECRET:-your-secret-key}
+      ACCESS_TTL: ${ACCESS_TTL:-15m}
+      REFRESH_TTL: ${REFRESH_TTL:-24h}
+      # Для простого валидатора админ-токенов из auth/token.go (если используешь)
+      ADMIN_TOKENS: ${ADMIN_TOKENS:-dev-admin-token}
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  pg_data:
